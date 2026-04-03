@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LM Studio Chat (qwen/qwen3-4b-2507)</title>
+  <style>
+    body { margin: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f8fafc; color: #1e293b; font-size: 16px; line-height: 1.5; }
+    .app { max-width: 900px; margin: 2rem auto; padding: 2rem; background: #ffffff; border-radius: 16px; box-shadow: 0 20px 40px rgba(0,0,0,.1); }
+    h1 { margin: 0 0 1.5rem; font-size: 2rem; font-weight: 700; color: #1e293b; text-align: center; }
+    #messages { min-height: 400px; max-height: 600px; border: 2px solid #e2e8f0; border-radius: 12px; overflow-y: auto; padding: 1rem; background: #f1f5f9; display: flex; flex-direction: column; gap: 1rem; }
+    .message { padding: 1rem 1.25rem; border-radius: 12px; line-height: 1.6; font-size: 1.1rem; max-width: 80%; word-wrap: break-word; }
+    .message pre { margin: 0; white-space: pre-wrap; font-family: Consolas, 'Courier New', monospace; background: #e2e8f0; border-radius: 8px; padding: 0.75rem; overflow-x: auto; }
+    .message code { font-family: Consolas, 'Courier New', monospace; background: #e2e8f0; border-radius: 6px; padding: 0.1rem 0.35rem; }
+    .user { background: #3b82f6; color: #ffffff; align-self: flex-end; margin-left: auto; }
+    .assistant { background: #f8fafc; color: #1e293b; border: 1px solid #e2e8f0; align-self: flex-start; }
+    .meta { font-size: 0.85rem; opacity: 0.8; margin-bottom: 0.5rem; font-weight: 600; }
+    form { margin-top: 1.5rem; display: grid; grid-template-columns: 1fr auto; gap: 1rem; }
+    textarea { width: 100%; min-height: 100px; border: 2px solid #cbd5e1; border-radius: 12px; padding: 1rem; font-size: 1rem; resize: vertical; font-family: inherit; }
+    button { border: 0; border-radius: 12px; padding: 1rem 1.5rem; background: #2563eb; color: #fff; font-weight: 600; cursor: pointer; font-size: 1rem; transition: background 0.2s; }
+    button:hover { background: #1d4ed8; }
+    button:disabled { opacity: 0.6; cursor: not-allowed; }
+    #status { margin-top: 1rem; color: #64748b; font-size: 1rem; text-align: center; }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <h1>Chat with LM Studio model</h1>
+    <div id="messages"></div>
+
+    <form id="chatForm">
+      <textarea id="prompt" placeholder="Type your message here..."></textarea>
+      <button type="submit">Send</button>
+    </form>
+
+    <div id="status">Ready.</div>
+
+    <div id="contextInfo" style="margin-top: 0.5rem; font-size: 0.9rem; color: #64748b; text-align: center;">Context: 0 messages</div>
+
+    <div style="margin-top:1rem; font-size:.9rem; color:#6b7280;">
+      Endpoint: <code>/chat</code> (proxied to LM Studio)<br>
+      Model: <code>qwen/qwen3-4b-2507</code><br>
+      API key: <code>handled server-side</code>
+    </div>
+  </div>
+
+  <script>
+    const apiUrl = '/chat';
+
+    const messagesEl = document.getElementById('messages');
+    const promptEl = document.getElementById('prompt');
+    const form = document.getElementById('chatForm');
+    const status = document.getElementById('status');
+    const contextInfo = document.getElementById('contextInfo');
+
+    const conversation = [];
+    const maxConversationLength = 20; // Max messages to keep in context
+
+    // Load chat history from localStorage
+    const savedHistory = localStorage.getItem('chatHistory');
+    if (savedHistory) {
+      const parsed = JSON.parse(savedHistory);
+      // Limit to max length
+      if (parsed.length > maxConversationLength) {
+        parsed.splice(0, parsed.length - maxConversationLength);
+      }
+      conversation.push(...parsed);
+      // Display loaded messages
+      parsed.forEach(msg => addMessage(msg.role, msg.content));
+    }
+    updateContextInfo();
+
+    function saveHistory() {
+      localStorage.setItem('chatHistory', JSON.stringify(conversation));
+    }
+
+    function estimateTokens(text) {
+      // Rough estimate: ~4 characters per token for English
+      return Math.ceil(text.length / 4);
+    }
+
+    function updateContextInfo() {
+      const totalChars = conversation.reduce((sum, msg) => sum + msg.content.length, 0);
+      const estimatedTokens = estimateTokens(conversation.map(msg => msg.content).join(' '));
+      contextInfo.textContent = `Context: ${conversation.length} messages (~${estimatedTokens} tokens)`;
+    }
+
+    function escapeHtml(text) {
+      const map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+      return text.replace(/[&<>"']/g, (m) => map[m]);
+    }
+
+    function formatMarkdown(text) {
+      if (!text) return '';
+
+      let escaped = escapeHtml(text);
+
+      // Code block fences ```...```
+      escaped = escaped.replace(/```([\s\S]*?)```/g, (match, code) => {
+        return `<pre><code>${code.trim()}</code></pre>`;
+      });
+
+      // Inline code `...`
+      escaped = escaped.replace(/`([^`]+)`/g, '<code>$1</code>');
+
+      // Convert paragraphs/line breaks
+      escaped = escaped.split('\n\n').map(p => p.replace(/\n/g, '<br>')).join('<br>\n');
+
+      return escaped;
+    }
+
+    function addMessage(role, text) {
+      const item = document.createElement('div');
+      item.className = 'message ' + (role === 'user' ? 'user' : 'assistant');
+      const meta = document.createElement('div');
+      meta.className = 'meta';
+      meta.textContent = role === 'user' ? 'You' : 'Assistant';
+      const body = document.createElement('div');
+
+      body.innerHTML = formatMarkdown(text);
+
+      item.appendChild(meta);
+      item.appendChild(body);
+      messagesEl.appendChild(item);
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
+
+    async function sendMessage(userText) {
+      addMessage('user', userText);
+      status.textContent = 'Waiting for model response...';
+
+      const payload = {
+        model: 'qwen/qwen3-4b-2507',
+        messages: conversation.concat([{ role: 'user', content: userText }]),
+        temperature: 0.2,
+        top_p: 0.95,
+        max_tokens: 8192
+      };
+
+      try {
+        const response = await fetch(apiUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(payload)
+        });
+
+        if (!response.ok) {
+          const errPayload = await response.text();
+          throw new Error(`HTTP ${response.status}: ${errPayload}`);
+        }
+
+        const data = await response.json();
+
+        // OpenAI-compatible response field
+        const modelText = data.choices && data.choices[0] && (data.choices[0].message?.content || data.choices[0].text);
+        if (!modelText) {
+          throw new Error('No text field in response: ' + JSON.stringify(data));
+        }
+
+        conversation.push({ role: 'user', content: userText });
+        conversation.push({ role: 'assistant', content: modelText });
+
+        // Trim oldest messages if exceeding limit
+        while (conversation.length > maxConversationLength) {
+          conversation.shift(); // Remove oldest message
+        }
+
+        addMessage('assistant', modelText);
+        status.textContent = 'Done.';
+        updateContextInfo();
+        saveHistory();
+
+      } catch (error) {
+        console.error(error);
+        const errorMsg = 'Error: ' + error.message;
+        conversation.push({ role: 'assistant', content: errorMsg });
+
+        // Trim oldest messages if exceeding limit
+        while (conversation.length > maxConversationLength) {
+          conversation.shift(); // Remove oldest message
+        }
+
+        addMessage('assistant', errorMsg);
+        status.textContent = errorMsg;
+        updateContextInfo();
+        saveHistory();
+      }
+    }
+
+    form.addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      const text = promptEl.value.trim();
+      if (!text) return;
+      form.querySelector('button').disabled = true;
+      promptEl.disabled = true;
+
+      await sendMessage(text);
+
+      promptEl.value = '';
+      form.querySelector('button').disabled = false;
+      promptEl.disabled = false;
+      promptEl.focus();
+    });
+  </script>
+</body>
+</html>
